@@ -1,6 +1,6 @@
 # Running a Stylus Smart Contract Locally on Arbitrum
 
-A step-by-step guide to setting up your environment, writing a Stylus (Rust) smart contract, deploying it to a local devnode, and interacting with it.
+A step-by-step guide to setting up your environment, writing a Stylus (Rust) smart contract, deploying it to a local testnode, and interacting with it.
 
 ---
 
@@ -13,7 +13,7 @@ A step-by-step guide to setting up your environment, writing a Stylus (Rust) sma
 5. [Install Foundry (Cast)](#5-install-foundry-cast)
 6. [Create a New Stylus Project](#6-create-a-new-stylus-project)
 7. [Understand the Contract Code](#7-understand-the-contract-code)
-8. [Run a Local Arbitrum Devnode](#8-run-a-local-arbitrum-devnode)
+8. [Run a Local Arbitrum Testnode](#8-run-a-local-arbitrum-testnode)
 9. [Check, Deploy, and Activate the Contract](#9-check-deploy-and-activate-the-contract)
 10. [Interact with the Contract](#10-interact-with-the-contract)
 11. [Troubleshooting](#11-troubleshooting)
@@ -24,9 +24,9 @@ A step-by-step guide to setting up your environment, writing a Stylus (Rust) sma
 
 | Tool | Minimum Version | Purpose |
 |------|----------------|---------|
-| **Rust** | 1.88+ | Compiles the smart contract to WASM |
-| **Docker** | Latest stable | Runs the local Arbitrum nitro-devnode |
-| **cargo-stylus** | Latest | CLI for Stylus project creation, deployment, and management |
+| **Rust** | 1.91.0 | Compiles the smart contract to WASM (required by stylus-sdk 0.10.2) |
+| **Docker** | Latest stable | Runs the local Arbitrum nitro-testnode |
+| **cargo-stylus** | 0.10.2 | CLI for Stylus project creation, deployment, and management |
 | **Foundry (cast)** | Latest | CLI for calling/sending transactions to deployed contracts |
 
 ---
@@ -39,9 +39,10 @@ Install Rust via `rustup`:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-After installation, verify:
+After installation, source the environment and verify:
 
 ```bash
+source "$HOME/.cargo/env"
 rustup --version
 rustc --version
 cargo --version
@@ -65,7 +66,7 @@ Verify:
 docker --version
 ```
 
-Make sure the Docker daemon is running before proceeding.
+Make sure the Docker daemon is running before proceeding. On macOS, open Docker Desktop from Applications.
 
 ---
 
@@ -108,18 +109,71 @@ cast --version
 
 ## 6. Create a New Stylus Project
 
-Generate a new project from the Counter template:
+Create the project directory:
 
 ```bash
-cargo stylus new my_counter
-cd my_counter
+mkdir my_counter && cd my_counter
+mkdir src
 ```
 
-This scaffolds a complete Stylus project with:
+### Cargo.toml
 
-- `src/lib.rs` — your contract code
-- `Cargo.toml` — dependencies and build configuration
-- A ready-to-compile project structure
+Create `Cargo.toml` with the following content. Only `stylus-sdk` is needed as a direct dependency — the compatible versions of `alloy-primitives` and `alloy-sol-types` are resolved automatically as transitive dependencies.
+
+```toml
+[package]
+name = "my_counter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stylus-sdk = "0.10.2"
+
+[dev-dependencies]
+tokio = "1.44"
+
+[features]
+export-abi = ["stylus-sdk/export-abi"]
+
+[lib]
+crate-type = ["lib", "cdylib"]
+```
+
+### rust-toolchain.toml
+
+Pin the Rust version to 1.91.0 (required by stylus-sdk 0.10.2) and include the WASM target:
+
+```toml
+[toolchain]
+channel = "1.91.0"
+targets = ["wasm32-unknown-unknown"]
+```
+
+### Stylus.toml
+
+Create a minimal Stylus configuration file:
+
+```toml
+[workspace]
+
+[workspace.networks]
+
+[contract]
+```
+
+### Project Structure
+
+After setup, your project should look like this:
+
+```
+my_counter/
+├── Cargo.toml
+├── Stylus.toml
+├── rust-toolchain.toml
+└── src/
+    ├── lib.rs          # Contract logic
+    └── main.rs         # ABI export entrypoint (required for deployment)
+```
 
 ### Recommended VS Code Extensions
 
@@ -131,38 +185,62 @@ This scaffolds a complete Stylus project with:
 
 ## 7. Understand the Contract Code
 
-Open `src/lib.rs`. The generated Counter contract looks like this:
+### src/lib.rs
+
+This is the main contract file. Create `src/lib.rs` with the following content:
 
 ```rust
-#![no_main]
-#![no_std]
-use stylus_sdk::{prelude::*, storage::StorageU256};
+#![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
+extern crate alloc;
+
+use stylus_sdk::{alloy_primitives::U256, prelude::*, storage::StorageU256};
 
 #[storage]
 #[entrypoint]
 pub struct Counter {
-    count: StorageU256,
+    number: StorageU256,
 }
 
 #[public]
 impl Counter {
-    /// Returns the current count value (free view call, no gas).
-    pub fn number(&self) -> U256 {
-        self.count.get()
+    /// Returns the current count value.
+    pub fn number(&self) -> Result<U256, Vec<u8>> {
+        Ok(self.number.get())
     }
 
-    /// Sets the counter to a specific value (state-changing, costs gas).
-    pub fn set_number(&mut self, new_number: U256) {
-        self.count.set(new_number);
+    /// Sets the counter to a specific value.
+    pub fn set_number(&mut self, number: U256) -> Result<(), Vec<u8>> {
+        self.number.set(number);
+        Ok(())
     }
 
-    /// Increments the counter by 1 (state-changing, costs gas).
-    pub fn increment(&mut self) {
-        let count = self.count.get();
-        self.count.set(count + 1);
+    /// Increments the counter by 1.
+    pub fn increment(&mut self) -> Result<(), Vec<u8>> {
+        let number = self.number.get() + U256::from(1);
+        self.number.set(number);
+        Ok(())
     }
 }
 ```
+
+### src/main.rs
+
+This file is **required** for `cargo stylus deploy` to work. It provides the ABI export entrypoint that the CLI uses to check for constructors and generate the ABI.
+
+```rust
+#![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
+
+#[cfg(not(any(test, feature = "export-abi")))]
+#[no_mangle]
+pub extern "C" fn main() {}
+
+#[cfg(feature = "export-abi")]
+fn main() {
+    my_counter::print_from_args();
+}
+```
+
+> **Note:** `print_from_args()` is a function automatically generated by the `#[entrypoint]` macro in `lib.rs`. It prints the contract's ABI to stdout.
 
 ### Key Concepts
 
@@ -174,38 +252,83 @@ impl Counter {
 | `#[public]` | `public` functions | Exposes methods as callable contract functions |
 | `&self` | `view` | Read-only access (no state modification) |
 | `&mut self` | (default) | Mutable access (state modification) |
-| `#![no_std]` | N/A | No standard library — required for WASM contracts |
+| `Result<T, Vec<u8>>` | revert | All public methods return `Result` for error handling |
+| `extern crate alloc` | N/A | Required — the SDK uses the `alloc` crate internally |
+| `cfg_attr(... no_main)` | N/A | Conditional — `no_main` for WASM, normal main for ABI export |
+
+### Solidity Comparison
+
+For reference, here's the equivalent Solidity contract:
+
+```solidity
+pragma solidity ^0.8.0;
+
+contract Counter {
+    uint256 public number;
+
+    function setNumber(uint256 newNumber) public {
+        number = newNumber;
+    }
+
+    function increment() public {
+        number++;
+    }
+}
+```
+
+### Build the Contract
+
+Verify everything compiles to WASM:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown
+```
 
 ---
 
-## 8. Run a Local Arbitrum Devnode
+## 8. Run a Local Arbitrum Testnode
 
-The local devnode gives you a private Arbitrum chain with pre-funded wallets and zero gas costs for testing.
+The local testnode gives you a private Arbitrum chain with pre-funded wallets for testing.
 
-### Start the Devnode
+> **Important:** There is no single Docker image for the devnode. The testnode is a multi-container setup orchestrated by a script.
 
-Clone and run the Nitro devnode:
+### Start the Testnode
 
-```bash
-git clone https://github.com/OffchainLabs/nitro-devnode.git
-cd nitro-devnode
-./run-dev-node.sh
-```
-
-Or run directly with Docker:
+Clone and initialize the Nitro testnode:
 
 ```bash
-docker run --rm -it -p 8547:8547 -p 8548:8548 offchainlabs/nitro-devnode:latest
+git clone -b release --recurse-submodules https://github.com/OffchainLabs/nitro-testnode.git
+cd nitro-testnode
+./test-node.bash --init
 ```
 
-The devnode exposes an RPC endpoint at `http://localhost:8547`.
+This starts multiple containers via Docker Compose:
+- **L1 geth** (dev chain) on `localhost:8545`
+- **L2 sequencer** (Nitro/Stylus chain) on `localhost:8547` (HTTP) and `localhost:8548` (WS)
+- Plus validators, batch posters, and other infrastructure
+
+The L2 RPC endpoint you'll use is `http://localhost:8547`.
+
+### Verify the Testnode is Running
+
+```bash
+cast chain-id --rpc-url http://localhost:8547
+```
+
+Expected output: `412346` (the default Nitro testnode L2 chain ID).
 
 ### Pre-funded Development Account
 
-The devnode comes with a pre-funded account for testing:
+The testnode comes with a pre-funded account for testing:
 
 - **Private Key:** `0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659`
-- **Address:** Derived from the key above
+- **Address:** `0x3f1Eae7D46d88F08fc2F8ed27FCb2AB183EB2d0E`
+
+Check the balance:
+
+```bash
+cast balance 0x3f1Eae7D46d88F08fc2F8ed27FCb2AB183EB2d0E --rpc-url http://localhost:8547
+```
 
 > This is a **development-only** key. Never use it on mainnet or testnets.
 
@@ -224,7 +347,14 @@ cargo stylus check \
 
 This compiles your Rust code to WASM and validates that it passes all safety checks (gas metering, depth-checking, memory charging) without actually deploying.
 
-### Step 2: Deploy (Post WASM Bytecode On-Chain)
+Expected output includes:
+
+```
+contract size: 5.2 KB (5156 bytes)
+wasm data fee: 0.000069 ETH
+```
+
+### Step 2: Deploy and Activate
 
 ```bash
 cargo stylus deploy \
@@ -234,17 +364,19 @@ cargo stylus deploy \
 
 This will:
 1. Compile the contract to WASM
-2. Post the WASM bytecode to the local chain
-3. Activate the contract (compile WASM to native machine code on-chain)
-4. Output the **contract address** and **transaction hash**
+2. Check for constructors (via the `export-abi` feature in `main.rs`)
+3. Post the WASM bytecode to the local chain
+4. Automatically activate the contract (compile WASM to native machine code on-chain)
+5. Output the **contract address**, **deployment tx hash**, and **activation tx hash**
 
 **Save the contract address** — you'll need it for the next step.
 
 Example output:
 
 ```
-Contract deployed and activated at: 0x1234...abcd
-Transaction hash: 0xabcd...1234
+deployed code at address: 0xa6e41ffd769491a42a6e5ce453259b93983a22ef
+deployment tx hash: 0x5432140cd5ab1e413adefc24b50011c2fc90c7eb...
+successfully activated contract 0xa6e41ffd769491a42a6e5ce453259b93983a22ef
 ```
 
 ### Understanding Activation
@@ -318,11 +450,15 @@ Expected output: `43`.
 |---------|----------|
 | `cargo stylus` not found | Run `cargo install --force cargo-stylus` |
 | WASM target missing | Run `rustup target add wasm32-unknown-unknown` |
-| Docker devnode won't start | Ensure Docker daemon is running: `docker info` |
+| Docker testnode won't start | Ensure Docker daemon is running: `docker info` |
+| Dependency conflict (`ruint` version) | Don't add `alloy-primitives` or `alloy-sol-types` directly — let `stylus-sdk` resolve them as transitive dependencies |
+| `failed to run contract` during deploy | You're missing `src/main.rs` or it doesn't have the `export-abi` conditional main function |
+| `a bin target must be available for cargo run` | Create `src/main.rs` with the ABI export entrypoint (see Section 7) |
 | Deployment fails with gas error | Make sure you're using the pre-funded private key |
 | Contract calls return errors | Verify the contract was activated (check deploy output) |
 | `cast` not found | Run `foundryup` to install/update Foundry tools |
 | Expired contract (after 365 days) | Reactivate with `cargo stylus activate` |
+| Rust version too old | stylus-sdk 0.10.2 requires Rust 1.91.0 — update `rust-toolchain.toml` |
 
 ### Useful Commands
 
@@ -336,6 +472,12 @@ cargo stylus export-abi
 # Reactivate an expired contract
 cargo stylus activate --endpoint http://localhost:8547 \
   --private-key <PRIVATE_KEY>
+
+# Check testnode chain ID
+cast chain-id --rpc-url http://localhost:8547
+
+# Check account balance
+cast balance <ADDRESS> --rpc-url http://localhost:8547
 ```
 
 ---
@@ -349,7 +491,7 @@ cargo stylus activate --endpoint http://localhost:8547 \
 │ Code │     │ Compile  │    │ Bytecode │    │  Code    │    │ call/send│
 └──────┘     └──────────┘    └──────────┘    └──────────┘    └──────────┘
 src/lib.rs   cargo stylus    cargo stylus    (automatic)     cast call
-             check           deploy                          cast send
+src/main.rs  check           deploy                          cast send
 ```
 
 ---
@@ -396,5 +538,5 @@ Stylus introduces **ink**, a sub-gas unit for WASM execution:
 - [Arbitrum Stylus Documentation](https://docs.arbitrum.io/stylus/stylus-gentle-introduction)
 - [Stylus SDK (Rust)](https://github.com/OffchainLabs/stylus-sdk-rs)
 - [cargo-stylus CLI](https://github.com/OffchainLabs/cargo-stylus)
-- [Nitro Devnode](https://github.com/OffchainLabs/nitro-devnode)
+- [Nitro Testnode](https://github.com/OffchainLabs/nitro-testnode)
 - [Foundry / Cast](https://book.getfoundry.sh/)

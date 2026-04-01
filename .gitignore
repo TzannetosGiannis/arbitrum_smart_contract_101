@@ -7,6 +7,9 @@ nitro-testnode/
 # PowerPoint source file
 *.pptx
 
+# Demo temp files
+demo/.contract_address
+
 # macOS
 .DS_Store
 
