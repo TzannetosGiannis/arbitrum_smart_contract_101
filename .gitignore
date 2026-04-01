@@ -1,0 +1,17 @@
+# Build artifacts
+my_counter/target/
+
+# Nitro testnode (cloned locally, not part of the project)
+nitro-testnode/
+
+# PowerPoint source file
+*.pptx
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

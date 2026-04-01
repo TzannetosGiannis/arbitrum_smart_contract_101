@@ -1,0 +1,16 @@
+[package]
+name = "my_counter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stylus-sdk = "0.10.2"
+
+[dev-dependencies]
+tokio = "1.44"
+
+[features]
+export-abi = ["stylus-sdk/export-abi"]
+
+[lib]
+crate-type = ["lib", "cdylib"]
