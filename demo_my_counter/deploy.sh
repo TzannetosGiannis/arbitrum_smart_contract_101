@@ -27,8 +27,9 @@ OUTPUT=$(cargo stylus deploy \
 
 echo "$OUTPUT"
 
-# Extract and save contract address
-ADDRESS=$(echo "$OUTPUT" | grep -oE "deployed code at address: 0x[0-9a-fA-F]+" | grep -oE "0x[0-9a-fA-F]+")
+# Extract and save contract address (strip ANSI codes first)
+CLEAN_OUTPUT=$(echo "$OUTPUT" | sed 's/\x1b\[[0-9;]*m//g')
+ADDRESS=$(echo "$CLEAN_OUTPUT" | grep -oE "deployed code at address: 0x[0-9a-fA-F]+" | grep -oE "0x[0-9a-fA-F]+")
 
 if [ -z "$ADDRESS" ]; then
   echo ""

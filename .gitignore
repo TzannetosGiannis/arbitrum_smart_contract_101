@@ -1,5 +1,6 @@
 # Build artifacts
 my_counter/target/
+crowdfunding/target/
 
 # Nitro testnode (cloned locally, not part of the project)
 nitro-testnode/
@@ -8,7 +9,8 @@ nitro-testnode/
 *.pptx
 
 # Demo temp files
-demo/.contract_address
+demo_my_counter/.contract_address
+demo_crowdfunding/.contract_address
 
 # macOS
 .DS_Store
